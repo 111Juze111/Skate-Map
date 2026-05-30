@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Skate Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, sans-serif; }
+    body { display: flex; flex-direction: column; height: 100vh; }
+    #map { flex: 1; }
+    .map-btn { position: absolute; z-index: 1000; width: 40px; height: 40px; background: white; border: 2px solid rgba(0,0,0,0.15); border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+    .map-btn.active { background: #e3f2fd; border-color: #1976d2; }
+    #draw-btn.active { background: #1a1a2e; color: white; border-color: #1a1a2e; }
+    #filter-btn.active { background: #f3e5f5; border-color: #7b1fa2; }
+    .osm-status { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 1000; background: rgba(0,0,0,0.7); color: white; padding: 5px 14px; border-radius: 20px; font-size: 12px; display: none; white-space: nowrap; }
+    .osm-status.show { display: block; }
+    .zoom-hint { position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%); z-index: 1000; background: rgba(0,0,0,0.6); color: white; padding: 5px 14px; border-radius: 20px; font-size: 12px; display: none; white-space: nowrap; }
+    .zoom-hint.show { display: block; }
+    .filter-panel { position: absolute; right: 60px; bottom: 296px; z-index: 1000; background: white; border-radius: 12px; padding: 10px 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.18); display: none; min-width: 160px; }
+    .filter-panel.show { display: block; }
+    .filter-title { font-size: 11px; font-weight: 600; color: #999; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .filter-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; cursor: pointer; user-select: none; }
+    .filter-item:last-child { margin-bottom: 0; }
+    .filter-dot { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; transition: opacity 0.15s; }
+    .filter-label { font-size: 12px; color: #333; transition: opacity 0.15s; }
+    .filter-item.off .filter-dot { opacity: 0.25; }
+    .filter-item.off .filter-label { opacity: 0.35; text-decoration: line-through; }
+    .panel { background: white; border-top: 1px solid #e0e0e0; padding: 10px 14px 12px; flex-shrink: 0; display: none; }
+    .panel.show { display: block; }
+    .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 7px; }
+    .label { font-size: 11px; color: #999; min-width: 62px; font-weight: 500; }
+    .chip { padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; cursor: pointer; border: 1.5px solid transparent; user-select: none; }
+    .chip.sel { border-color: currentColor; }
+    .divider { height: 1px; background: #f0f0f0; margin: 3px 0 7px; }
+    .hint { font-size: 11px; color: #aaa; margin-bottom: 7px; }
+    .buttons { display: flex; gap: 7px; }
+    .btn { flex: 1; padding: 9px; border-radius: 9px; font-size: 12px; font-weight: 500; cursor: pointer; border: none; }
+    .btn-save { background: #1a1a2e; color: white; }
+    .btn-save:disabled { background: #ddd; color: #aaa; cursor: default; }
+    .btn-sm { background: #f0f0f0; color: #555; flex: 0 0 auto; padding: 9px 12px; }
+    .btn-danger { background: #f0f0f0; color: #c62828; flex: 0 0 auto; padding: 9px 12px; }
+    .sync-status { font-size: 10px; margin-top: 5px; text-align: right; }
+    .sync-ok { color: #388e3c; } .sync-err { color: #c62828; } .sync-loading { color: #aaa; }
+    .edit-popup { position: fixed; bottom: 0; left: 0; right: 0; background: white; border-top: 2px solid #e0e0e0; padding: 14px 16px 20px; z-index: 9999; transform: translateY(100%); transition: transform 0.2s ease; }
+    .edit-popup.open { transform: translateY(0); }
+    .edit-title { font-size: 13px; font-weight: 500; color: #1a1a2e; margin-bottom: 10px; display: flex; justify-content: space-between; }
+    .edit-close { font-size: 22px; color: #aaa; cursor: pointer; }
+    .edit-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .edit-btns { display: flex; gap: 8px; margin-top: 10px; }
+    .edit-btn { flex: 1; padding: 10px; border-radius: 10px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; }
+    .edit-save { background: #1a1a2e; color: white; }
+    .edit-delete { background: #ffebee; color: #c62828; flex: 0 0 auto; padding: 10px 14px; }
+    .edit-cancel { background: #f0f0f0; color: #555; flex: 0 0 auto; padding: 10px 14px; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="osm-status" id="osm-status">Загружаю покрытия...</div>
+<div class="zoom-hint" id="zoom-hint">Приблизь карту чтобы увидеть покрытия</div>
+
+<button class="map-btn" id="locate-btn" style="position:absolute;bottom:200px;right:12px;">🛹</button>
+<button class="map-btn" id="draw-btn"   style="position:absolute;bottom:248px;right:12px;">✏️</button>
+<button class="map-btn" id="filter-btn" style="position:absolute;bottom:296px;right:12px;">🎨</button>
+
+<div class="filter-panel" id="filter-panel">
+  <div class="filter-title">Фильтр покрытий</div>
+</div>
+
+<div class="panel" id="draw-panel">
+  <div class="hint" id="hint">Кликай на карте чтобы нарисовать участок</div>
+  <div class="row">
+    <span class="label">Покрытие</span>
+    <div id="cs" style="display:flex;gap:5px;flex-wrap:wrap;"></div>
+  </div>
+  <div class="divider"></div>
+  <div class="row">
+    <span class="label">Качество</span>
+    <div id="cq" style="display:flex;gap:5px;flex-wrap:wrap;"></div>
+  </div>
+  <div class="buttons">
+    <button class="btn btn-sm" id="btn-undo">↩</button>
+    <button class="btn btn-save" id="btn-save" disabled>Сохранить</button>
+    <button class="btn btn-danger" id="btn-cancel">✕</button>
+  </div>
+  <div class="sync-status" id="sync-status"></div>
+</div>
+
+<div class="edit-popup" id="edit-popup">
+  <div class="edit-title">
+    <span>Редактировать участок</span>
+    <span class="edit-close" id="edit-close">×</span>
+  </div>
+  <div class="edit-row">
+    <span class="label">Покрытие</span>
+    <div id="ecs" style="display:flex;gap:5px;flex-wrap:wrap;"></div>
+  </div>
+  <div class="divider"></div>
+  <div class="edit-row">
+    <span class="label">Качество</span>
+    <div id="ecq" style="display:flex;gap:5px;flex-wrap:wrap;"></div>
+  </div>
+  <div class="edit-btns">
+    <button class="edit-btn edit-delete" id="edit-delete">🗑 Удалить</button>
+    <button class="edit-btn edit-cancel" id="edit-cancel-btn">Отмена</button>
+    <button class="edit-btn edit-save" id="edit-save">✓ Сохранить</button>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = 'https://rjpsqxcvvqxcglzmfsqb.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJqcHNxeGN2dnF4Y2dsem1mc3FiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MTk1MDksImV4cCI6MjA5NTA5NTUwOX0.WP1-DQcrBiPKFRtdAlairDAtaudRng6KBBZwAXMjTeM';
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const YANDEX_KEY = '877d3246-7aff-42a0-9fba-f7c2bb0904dd';
+
+const SURFACES = [
+  { id:'asphalt',  label:'Асфальт',   color:'#388e3c', bg:'#e8f5e9', text:'#1b5e20' },
+  { id:'tile',     label:'Плитка',    color:'#1976d2', bg:'#e3f2fd', text:'#0d47a1' },
+  { id:'cobble',   label:'Брусчатка', color:'#f57c00', bg:'#fff3e0', text:'#bf360c' },
+  { id:'gravel',   label:'Гравий',    color:'#c62828', bg:'#ffebee', text:'#b71c1c' },
+  { id:'dirt',     label:'Грунт',     color:'#6d4c41', bg:'#efebe9', text:'#4e342e' },
+  { id:'concrete', label:'Бетон',     color:'#546e7a', bg:'#eceff1', text:'#37474f' },
+];
+const QUALITY = [
+  { id:'good', label:'😊 Норм',   weight:5, opacity:1.0,  dash:null,  bg:'#e8f5e9', text:'#1b5e20' },
+  { id:'mid',  label:'😐 Средне', weight:4, opacity:0.85, dash:'8,5', bg:'#fff3e0', text:'#bf360c' },
+  { id:'bad',  label:'😬 Плохо',  weight:3, opacity:0.8,  dash:'3,7', bg:'#ffebee', text:'#b71c1c' },
+];
+
+const surf = id => SURFACES.find(x=>x.id===id);
+const qual = id => QUALITY.find(x=>x.id===id);
+
+const OSM_SURFACE_MAP = {
+  asphalt:'asphalt', paved:'asphalt', tarmac:'asphalt',
+  concrete:'concrete', 'concrete:plates':'concrete', 'concrete:lanes':'concrete',
+  paving_stones:'tile', sett:'cobble', cobblestone:'cobble', unhewn_cobblestone:'cobble',
+  gravel:'gravel', fine_gravel:'gravel', compacted:'gravel', pebblestone:'gravel',
+  dirt:'dirt', ground:'dirt', grass:'dirt', earth:'dirt', mud:'dirt', unpaved:'dirt', sand:'dirt',
+};
+
+function osmColor(surface) {
+  const mapped = OSM_SURFACE_MAP[surface];
+  return mapped ? { color: surf(mapped)?.color, id: mapped } : null;
+}
+
+function lineStyle(sId, qId) {
+  const s=surf(sId), q=qual(qId);
+  return { color:s.color, weight:q.weight, opacity:q.opacity, dashArray:q.dash, lineJoin:'round', lineCap:'round' };
+}
+function applyStyle(poly, sId, qId) {
+  const q=qual(qId);
+  poly.setStyle({ color:surf(sId).color, weight:q.weight, opacity:q.opacity, dashArray:q.dash||null });
+}
+
+let activeFilters = new Set(SURFACES.map(s=>s.id));
+let osmLines = [];
+
+function applyFilters() {
+  osmLines.forEach(({polyline, surfaceId}) => {
+    if (activeFilters.has(surfaceId)) { if (!map.hasLayer(polyline)) polyline.addTo(map); }
+    else { if (map.hasLayer(polyline)) map.removeLayer(polyline); }
+  });
+  segments.forEach(seg => {
+    if (activeFilters.has(seg.surface)) { if (!map.hasLayer(seg.polyline)) seg.polyline.addTo(map); }
+    else { if (map.hasLayer(seg.polyline)) map.removeLayer(seg.polyline); }
+  });
+}
+
+const filterPanel = document.getElementById('filter-panel');
+SURFACES.forEach(s => {
+  const item = document.createElement('div');
+  item.className = 'filter-item';
+  item.dataset.id = s.id;
+  item.innerHTML = '<div class="filter-dot" style="background:'+s.color+';"></div><div class="filter-label">'+s.label+'</div>';
+  item.onclick = () => {
+    if (activeFilters.has(s.id)) { activeFilters.delete(s.id); item.classList.add('off'); }
+    else { activeFilters.add(s.id); item.classList.remove('off'); }
+    applyFilters();
+  };
+  filterPanel.appendChild(item);
+});
+
+document.getElementById('filter-btn').onclick = () => {
+  const isOpen = filterPanel.classList.contains('show');
+  filterPanel.classList.toggle('show', !isOpen);
+  document.getElementById('filter-btn').classList.toggle('active', !isOpen);
+};
+document.addEventListener('click', e => {
+  if (!filterPanel.contains(e.target) && e.target !== document.getElementById('filter-btn')) {
+    filterPanel.classList.remove('show');
+    document.getElementById('filter-btn').classList.remove('active');
+  }
+});
+
+// ---- Карта с Яндекс тайлами ----
+const map = L.map('map', { doubleClickZoom:false }).setView([53.902, 27.562], 13);
+
+// Яндекс тайлы через Leaflet
+L.tileLayer('https://core-renderer-tiles.maps.yandex.net/tiles?l=map&v=21.09.15-0-b210923110030&x={x}&y={y}&z={z}&scale=1&lang=ru_RU', {
+  attribution: '© Яндекс',
+  maxZoom: 19,
+  minZoom: 2,
+}).addTo(map);
+
+const MIN_ZOOM = 15;
+let loadedKeys = new Set();
+let isLoadingOSM = false;
+
+function updateZoomHint() {
+  document.getElementById('zoom-hint').className = 'zoom-hint' + (map.getZoom() < MIN_ZOOM ? ' show' : '');
+}
+
+async function loadOSMSurfaces() {
+  updateZoomHint();
+  if (map.getZoom() < MIN_ZOOM) { osmLines.forEach(l=>{ if(map.hasLayer(l.polyline)) map.removeLayer(l.polyline); }); osmLines=[]; loadedKeys.clear(); return; }
+  if (isLoadingOSM) return;
+  const b = map.getBounds();
+  const key = [b.getSouth().toFixed(3),b.getWest().toFixed(3),b.getNorth().toFixed(3),b.getEast().toFixed(3)].join(',');
+  if (loadedKeys.has(key)) return;
+  isLoadingOSM = true;
+  document.getElementById('osm-status').className = 'osm-status show';
+  const bbox = b.getSouth()+','+b.getWest()+','+b.getNorth()+','+b.getEast();
+  const query = '[out:json][timeout:25];(way[highway~"^(footway|path|cycleway|pedestrian|living_street|track)$"][surface]('+bbox+'););out geom;';
+  try {
+    const res = await fetch('https://overpass-api.de/api/interpreter', { method:'POST', body:'data='+encodeURIComponent(query) });
+    const data = await res.json();
+    data.elements.forEach(way => {
+      if (!way.geometry) return;
+      const info = osmColor(way.tags?.surface);
+      if (!info) return;
+      const coords = way.geometry.map(p=>[p.lat,p.lon]);
+      const polyline = L.polyline(coords, { color:info.color, weight:4, opacity:0.85, lineJoin:'round', lineCap:'round', interactive:false });
+      if (activeFilters.has(info.id)) polyline.addTo(map);
+      osmLines.push({ polyline, surfaceId: info.id });
+    });
+    loadedKeys.add(key);
+  } catch(e) { console.error(e); }
+  isLoadingOSM = false;
+  document.getElementById('osm-status').className = 'osm-status';
+}
+
+let osmTimer = null;
+map.on('moveend zoomend', () => { clearTimeout(osmTimer); osmTimer = setTimeout(loadOSMSurfaces, 800); });
+
+// ---- Геолокация ----
+let locationMarker=null, locationCircle=null, firstFix=true;
+const skateIcon = L.divIcon({
+  html:'<div style="font-size:30px;line-height:1;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.35));">🛹</div>',
+  className:'', iconSize:[30,30], iconAnchor:[15,15]
+});
+function updateLocation(latlng, accuracy) {
+  if (!locationMarker) {
+    locationMarker = L.marker(latlng,{icon:skateIcon,interactive:false,zIndexOffset:1000}).addTo(map);
+    locationCircle = L.circle(latlng,{radius:accuracy,color:'#2979ff',weight:1,fillColor:'#2979ff',fillOpacity:0.1,interactive:false}).addTo(map);
+  } else { locationMarker.setLatLng(latlng); locationCircle.setLatLng(latlng).setRadius(accuracy); }
+  if (firstFix) { map.setView(latlng,17); firstFix=false; loadOSMSurfaces(); }
+}
+function startTracking() {
+  if (!navigator.geolocation) return;
+  document.getElementById('locate-btn').classList.add('active');
+  navigator.geolocation.watchPosition(
+    pos => updateLocation(L.latLng(pos.coords.latitude,pos.coords.longitude),pos.coords.accuracy),
+    () => document.getElementById('locate-btn').classList.remove('active'),
+    {enableHighAccuracy:true,maximumAge:5000,timeout:10000}
+  );
+}
+document.getElementById('locate-btn').onclick=()=>{ if(locationMarker) map.setView(locationMarker.getLatLng(),17); else startTracking(); };
+startTracking();
+
+// ---- Рисование ----
+let drawMode=false, surface='asphalt', quality='good';
+let pts=[], dotMarkers=[], previewLine=null, segments=[];
+
+document.getElementById('draw-btn').onclick=()=>{
+  drawMode=!drawMode;
+  document.getElementById('draw-btn').classList.toggle('active',drawMode);
+  document.getElementById('draw-panel').classList.toggle('show',drawMode);
+  if(!drawMode) cancelDraw();
+};
+
+function dotIcon(color) {
+  return L.divIcon({ html:'<div style="width:8px;height:8px;border-radius:50%;background:'+color+';border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.5);"></div>', className:'', iconSize:[8,8], iconAnchor:[4,4] });
+}
+function redrawPreview() {
+  if(previewLine){previewLine.remove();previewLine=null;}
+  if(pts.length>=2) previewLine=L.polyline(pts,lineStyle(surface,quality)).addTo(map);
+}
+function updateHint() {
+  const el=document.getElementById('hint');
+  if(!pts.length) el.textContent='Кликай на карте чтобы нарисовать участок';
+  else if(pts.length===1) el.textContent='Ещё одна точка — и линия появится';
+  else el.textContent='Точек: '+pts.length+' — добавляй ещё или сохраняй';
+}
+function cancelDraw() {
+  pts=[]; dotMarkers.forEach(m=>m.remove()); dotMarkers=[];
+  if(previewLine){previewLine.remove();previewLine=null;}
+  document.getElementById('btn-save').disabled=true;
+  updateHint();
+}
+map.on('click',function(e){
+  if(!drawMode) return;
+  if(document.getElementById('edit-popup').classList.contains('open')) return;
+  pts.push(e.latlng);
+  dotMarkers.push(L.marker(e.latlng,{icon:dotIcon(surf(surface).color),interactive:false}).addTo(map));
+  redrawPreview();
+  document.getElementById('btn-save').disabled=pts.length<2;
+  updateHint();
+});
+document.getElementById('btn-undo').onclick=()=>{ if(!pts.length)return; pts.pop(); dotMarkers.pop()?.remove(); redrawPreview(); document.getElementById('btn-save').disabled=pts.length<2; updateHint(); };
+document.getElementById('btn-cancel').onclick=cancelDraw;
+document.getElementById('btn-save').onclick=async()=>{
+  if(pts.length<2) return;
+  const ptsData=pts.map(p=>({lat:p.lat,lng:p.lng}));
+  setSync('Сохраняю...','sync-loading');
+  const{data,error}=await db.from('segments').insert([{pts:ptsData,surface,quality}]).select();
+  if(error){setSync('Ошибка','sync-err');return;}
+  const seg={id:data[0].id,pts:ptsData,surface,quality};
+  seg.polyline=L.polyline(ptsData,lineStyle(surface,quality));
+  if(activeFilters.has(surface)) seg.polyline.addTo(map);
+  attachClick(seg); segments.push(seg);
+  setSync('✓ Сохранено','sync-ok');
+  cancelDraw();
+};
+
+function setSync(msg,cls){ const el=document.getElementById('sync-status'); el.textContent=msg; el.className='sync-status '+cls; }
+
+function buildChips(elId,items,getV,setV,onChange){
+  const el=document.getElementById(elId); el.innerHTML='';
+  items.forEach(s=>{
+    const d=document.createElement('div');
+    d.className='chip'+(s.id===getV()?' sel':'');
+    d.style.cssText='background:'+s.bg+';color:'+s.text+';';
+    d.textContent=s.label;
+    d.onclick=()=>{ setV(s.id); el.querySelectorAll('.chip').forEach(c=>c.classList.remove('sel')); d.classList.add('sel'); if(onChange)onChange(); };
+    el.appendChild(d);
+  });
+}
+buildChips('cs',SURFACES,()=>surface,v=>{surface=v;dotMarkers.forEach(m=>m.setIcon(dotIcon(surf(v).color)));redrawPreview();});
+buildChips('cq',QUALITY, ()=>quality,v=>{quality=v;redrawPreview();});
+
+// ---- Редактирование ----
+let editSeg=null,editOrigSurf=null,editOrigQual=null;
+function attachClick(seg){
+  seg.polyline.on('click',function(e){ if(drawMode)return; L.DomEvent.stopPropagation(e); openEdit(seg); });
+}
+function openEdit(seg){
+  editSeg=seg;editOrigSurf=seg.surface;editOrigQual=seg.quality;
+  buildChips('ecs',SURFACES,()=>editSeg.surface,v=>{editSeg.surface=v;applyStyle(editSeg.polyline,editSeg.surface,editSeg.quality);});
+  buildChips('ecq',QUALITY, ()=>editSeg.quality, v=>{editSeg.quality=v;applyStyle(editSeg.polyline,editSeg.surface,editSeg.quality);});
+  document.getElementById('edit-popup').classList.add('open');
+}
+function closeEdit(revert){
+  if(revert&&editSeg){editSeg.surface=editOrigSurf;editSeg.quality=editOrigQual;applyStyle(editSeg.polyline,editOrigSurf,editOrigQual);}
+  editSeg=null; document.getElementById('edit-popup').classList.remove('open');
+}
+document.getElementById('edit-close').onclick=()=>closeEdit(true);
+document.getElementById('edit-cancel-btn').onclick=()=>closeEdit(true);
+document.getElementById('edit-save').onclick=async()=>{ if(!editSeg)return; await db.from('segments').update({surface:editSeg.surface,quality:editSeg.quality}).eq('id',editSeg.id); closeEdit(false); };
+document.getElementById('edit-delete').onclick=async()=>{ if(!editSeg)return; await db.from('segments').delete().eq('id',editSeg.id); editSeg.polyline.remove(); segments=segments.filter(s=>s!==editSeg); closeEdit(false); };
+
+async function loadSegments(){
+  const{data,error}=await db.from('segments').select('*');
+  if(error)return;
+  data.forEach(row=>{
+    const seg={id:row.id,pts:row.pts,surface:row.surface,quality:row.quality};
+    seg.polyline=L.polyline(seg.pts,lineStyle(seg.surface,seg.quality));
+    if(activeFilters.has(seg.surface)) seg.polyline.addTo(map);
+    attachClick(seg); segments.push(seg);
+  });
+}
+
+loadSegments();
+updateHint();
+updateZoomHint();
+</script>
+</body>
+</html>
